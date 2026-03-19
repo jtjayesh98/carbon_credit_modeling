@@ -3,8 +3,11 @@ import numpy as np
 import pandas as pd
 from rasterio.transform import rowcol
 from rasterio.warp import reproject, Resampling
-
+from rasterio.mask import mask
 from pyproj import Transformer
+import geopandas as gpd
+from shapely.geometry import shape
+import json
 
 
 # Reproject x,y coordinates from source CRS to destination CRS
@@ -186,68 +189,146 @@ def get_truth_on_prediction_grid(
         return aligned
 
 
-# Compute additionality metrics by comparing predicted probabilities with ground truth at sampled points
-def compute_additionality(points_csv, prob_raster, truth_raster):
-    df = pd.read_csv(points_csv)
+# Compute additionality metrics for an entire area defined by a geometry
+def compute_additionality_for_area(geom, prob_raster_path, truth_raster_path, site_name, map_type):
+    target_crs = 'EPSG:4326'
+    
+    # Get bounds of the geometry in WGS84
+    minx, miny, maxx, maxy = geom.bounds
 
-    with rasterio.open(prob_raster) as prob_src:
+    # Define resolution (degrees, approx 10m)
+    res = 0.0001
 
-        lat_ref = df["y"].mean()
-        pixel_area = compute_pixel_area(prob_src, lat_ref)
+    width = int((maxx - minx) / res)
+    height = int((maxy - miny) / res)
 
-        print(f"Pixel area (m²): {pixel_area:.3f}")
+    transform = rasterio.transform.from_bounds(minx, miny, maxx, maxy, width, height)
 
-        truth_aligned = get_truth_on_prediction_grid(
-            truth_raster,
-            prob_src,
-            truth_band_name="9_deforestation"
+    # Reproject prob to this WGS84 grid
+    with rasterio.open(prob_raster_path) as prob_src:
+        band = 2 if map_type.startswith('cf') else 1
+        prob_reproj = np.zeros((height, width), dtype=np.float32)
+        reproject(
+            source=prob_src.read(band),
+            destination=prob_reproj,
+            src_transform=prob_src.transform,
+            src_crs=prob_src.crs,
+            dst_transform=transform,
+            dst_crs=target_crs,
+            resampling=Resampling.nearest
         )
 
-        df["pred_prob"] = sample_raster_at_points(
-            prob_src,
-            df,
-            band=1
+    # Reproject truth to the same grid
+    with rasterio.open(truth_raster_path) as truth_src:
+        truth_band = get_band_index_by_name(truth_src, "9_deforestation")
+        truth_reproj = np.zeros((height, width), dtype=np.float32)
+        reproject(
+            source=truth_src.read(truth_band),
+            destination=truth_reproj,
+            src_transform=truth_src.transform,
+            src_crs=truth_src.crs,
+            dst_transform=transform,
+            dst_crs=target_crs,
+            resampling=Resampling.nearest
         )
 
+    # Now, mask both with the geometry (geom is in WGS84)
+    from rasterio.features import rasterize
+    mask_array = rasterize([geom], out_shape=(height, width), transform=transform, fill=0, default_value=1, dtype=np.uint8)
 
-        df["truth"] = sample_array_at_points(
-            truth_aligned,
-            prob_src.transform,
-            prob_src.crs,
-            df
-        )
-    df = df.dropna(subset=["pred_prob", "truth"])
+    # Apply mask
+    prob_masked = np.where(mask_array == 1, prob_reproj, np.nan)
+    truth_masked = np.where(mask_array == 1, truth_reproj, np.nan)
 
-    assert np.isscalar(df["truth"].iloc[0]), "Truth must be scalar per row"
-    udefarp = True
-    print(df["truth"].sum())
-    print(df["pred_prob"].sum())
-    print(df.head())
-    if udefarp:
-        df["additionality"] = 0 - (df["truth"] * pixel_area/10000 - (df["pred_prob"]))
+    # Compute pixel area (in m², using approximate lat)
+    lat_ref = geom.centroid.y
+    R = 6378137
+    deg2rad = np.pi / 180
+    pixel_width_m = res * deg2rad * R * np.cos(lat_ref * deg2rad)
+    pixel_height_m = res * deg2rad * R
+    pixel_area = pixel_width_m * pixel_height_m
+
+    print(f"Pixel area (m²): {pixel_area:.3f} for {site_name}, {map_type}")
+
+    # Compute additionality
+    valid = ~np.isnan(prob_masked) & ~np.isnan(truth_masked)
+    if site_name == "Pangatira":
+        print(f"Mean pred for {site_name}, {map_type}: {np.mean(prob_masked[valid]):.6f}")
+        print(f"Mean truth for {site_name}, {map_type}: {np.mean(truth_masked[valid]):.6f}")
+    if map_type == 'udef_arp':
+        additionality = np.sum(0 - (truth_masked[valid] * pixel_area / 10000 - prob_masked[valid]))
     else:
-        df["additionality"] =  0 -((df["truth"] - df["pred_prob"]) * pixel_area)/10000
+        additionality = np.sum(0 - ((truth_masked[valid] - prob_masked[valid]) * pixel_area) / 10000)
 
-
-
-    return df
+    return additionality
 
 
 
 
-POINTS = "./data/images/sampled_ground_truth_pixels.csv"
-PROB_TIF = "./outputs/predictions/deforestation_adjusted_prob_2010_15_full_ex_post.tif"
-PROB_TIF = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
+# Placeholders for the 5 different maps
+maps = {
+    'cf_ex_ante': {'path': None, 'scale': 'm2'},  # Placeholder, set to actual path
+    'cf_ex_post': {'path': None, 'scale': 'm2'},
+    'model_ex_ante': {'path': None, 'scale': 'm2'},
+    'model_ex_post': {'path': None, 'scale': 'm2'},
+    'udef_arp': {'path': None, 'scale': 'other'},
+}
+
+# For now, set example paths (update as needed)
+maps['cf_ex_ante']['path'] = "./outputs/predictions/counterfactual_prediction_FULL_2010_15_ex_ante.tif"  # Placeholder
+maps['cf_ex_post']['path'] = "./outputs/predictions/counterfactual_prediction_FULL_2010_15_ex_post.tif"
+maps['model_ex_ante']['path'] = "./outputs/predictions/deforestation_prob_2010_15_full_ex_ante.tif"
+maps['model_ex_post']['path'] = "./outputs/predictions/deforestation_prob_2010_15_full_ex_post.tif"
+maps['udef_arp']['path'] = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
+
+# Load Odisha sites
+df_sites = pd.read_csv('./data/images/Odisha_sites.csv')
+def parse_geo(geo_str):
+    data = json.loads(geo_str)
+    if data['type'] == 'LinearRing':
+        data['type'] = 'Polygon'
+        data['coordinates'] = [data['coordinates']]
+    return shape(data)
+df_sites['geometry'] = df_sites['.geo'].apply(parse_geo)
+gdf_sites = gpd.GeoDataFrame(df_sites, geometry='geometry')
+gdf_sites.crs = 'EPSG:4326'
+
+# Compute areas in hectares
+gdf_projected = gdf_sites.to_crs('EPSG:3857')  # Web Mercator for area calculation
+gdf_sites['area_ha'] = gdf_projected.area / 10000  # m² to ha
+
 TRUTH_TIF = "./data/images/training_data_x_2005_10_y_2010_15.tif"
 
-df_add = compute_additionality(
-    points_csv=POINTS,
-    prob_raster=PROB_TIF,
-    truth_raster=TRUTH_TIF
-)
+# Compute for each site and each map
+results = {}
+for idx, row in gdf_sites.iterrows():
+    site_name = row['Name']
+    geom = row['geometry']
+    area_ha = row['area_ha']
+    results[site_name] = {'area_ha': area_ha}
+    for map_type, map_info in maps.items():
+        if map_info['path'] is None:
+            print(f"Skipping {map_type} for {site_name}: path not set")
+            continue
+        additionality = compute_additionality_for_area(geom, map_info['path'], TRUTH_TIF, site_name, map_type)
+        results[site_name][map_type] = additionality
+        print(f"Additionality for {site_name}, {map_type}: {additionality}")
+
+# Optionally, save results
+import json
+with open('./additionality_results.json', 'w') as f:
+    json.dump(results, f, indent=4)
+
+# Create and display table
+import pandas as pd
+df_results = pd.DataFrame(results).T  # Sites as rows, maps as columns
+print("\nAdditionality Table:")
+print(df_results)
+df_results.to_csv('./additionality_table.csv')
+print("Table saved to ./additionality_table.csv")
 
 
 
-print("Additionality summary:")
-print(df_add["additionality"].describe())
-print("Total additionality (ha):", df_add["additionality"].sum())
+# print("Additionality summary:")
+# print(df_sites["additionality"].describe())
+# print("Total additionality (ha):", df_sites["additionality"].sum())

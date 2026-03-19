@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 from rasterio.warp import reproject, Resampling
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-prediction_path = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
+# prediction_path = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
+prediction_path = "./outputs/predictions/Acre_Modeling_Region_HRP.tif"
 mask_path = "./data/images/Dhenkanal_2010.tif"
 
 with rasterio.open(mask_path) as mask_src:
@@ -57,7 +58,7 @@ extent = [left, right, bottom, top]
 fig, ax = plt.subplots(figsize=(7,5))
 
 im = ax.imshow(
-    pred_cropped,
+    pred_cropped/1000,
     cmap="viridis",
     extent=extent,
     origin="upper"
@@ -70,11 +71,12 @@ ax.set_title("Adjusted Prediction Density Map", fontsize=12)
 divider = make_axes_locatable(ax)
 cax = divider.append_axes("right", size="5%", pad=0.05)
 cbar = plt.colorbar(im, cax=cax)
-cbar.set_label("Prediction Score")
+cbar.set_label("Deforestation Vulnerability Classes (UDef-ARP)")
+# cbar.set_label("Prediction Score")
 
 plt.tight_layout()
 
-plt.savefig("./figures/prediction_aligned_mask.pdf", dpi=600, bbox_inches="tight")
-plt.savefig("./figures/prediction_aligned_mask.jpg", dpi=600, bbox_inches="tight")
+plt.savefig("./figures/modeling_region.pdf", dpi=600, bbox_inches="tight")
+plt.savefig("./figures/modeling_region.jpg", dpi=600, bbox_inches="tight")
 
 plt.show()
