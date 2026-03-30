@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 from rasterio.warp import reproject, Resampling
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-# prediction_path = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
-prediction_path = "./outputs/predictions/Acre_Modeling_Region_HRP.tif"
+prediction_path = "./outputs/predictions/Acre_Adjucted_Density_Map_VP.tif"
+# prediction_path = "./outputs/predictions/Acre_Modeling_Region_HRP.tif"
 mask_path = "./data/images/Dhenkanal_2010.tif"
 
 with rasterio.open(mask_path) as mask_src:
@@ -76,7 +76,7 @@ cbar.set_label("Deforestation Vulnerability Classes (UDef-ARP)")
 
 plt.tight_layout()
 
-plt.savefig("./figures/modeling_region.pdf", dpi=600, bbox_inches="tight")
-plt.savefig("./figures/modeling_region.jpg", dpi=600, bbox_inches="tight")
+plt.savefig("./figures/region.pdf", dpi=600, bbox_inches="tight")
+plt.savefig("./figures/region.jpg", dpi=600, bbox_inches="tight")
 
 plt.show()

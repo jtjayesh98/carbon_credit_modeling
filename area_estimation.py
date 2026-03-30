@@ -25,10 +25,10 @@ class RunConfig:
 
 
 RUNS = [
-    RunConfig("rf_ex_ante", True, False, False),
-    RunConfig("rf_ex_post", False, False, False),
-    RunConfig("counterfactual_ex_ante", True, True, False),
-    RunConfig("counterfactual_ex_post", False, True, False),
+#     RunConfig("rf_ex_ante", True, False, False),
+#     RunConfig("rf_ex_post", False, False, False),
+#     RunConfig("counterfactual_ex_ante", True, True, False),
+#     RunConfig("counterfactual_ex_post", False, True, False),
     RunConfig("udef_arp", False, False, True),
 ]
 
